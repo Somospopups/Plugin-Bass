@@ -1,0 +1,45 @@
+================================================================================
+  COMO ACTIVAR LAS ACTUALIZACIONES AUTOMATICAS EN GITHUB (Somospopups/Plugin-Bass)
+================================================================================
+
+El plugin XV Bass Pedal v6.0 ya viene conectado de fabrica a tu repositorio:
+  -> https://github.com/Somospopups/Plugin-Bass
+
+TENES 2 FORMAS SUPER FACILES DE SUBIR ESTA CARPETA A TU REPOSITORIO VACIO:
+
+--------------------------------------------------------------------------------
+OPCION A (RECOMENDADA - 1 CLIC, SUBE TODO INCLUYENDO EL COMPILADOR DE MAC .PKG):
+--------------------------------------------------------------------------------
+  • En Mac: Hace doble clic en 'Publicar_en_GitHub (Mac).command'
+  • En Windows: Hace doble clic en 'Publicar_en_GitHub (Windows).bat'
+
+  Eso sube todos los archivos (incluida la carpeta oculta .github/workflows).
+  Apenas termina de subir:
+  1) Tu archivo 'xv_updates.json' ya queda vivo en internet para sincronizar
+     presets automaticamente en todas las computadoras.
+  2) En la pestaña 'Actions' de GitHub se compilan solos los instaladores
+     oficiales 'Instalar_XV_Bass_Pedal_Mac_Universal.pkg' (Mac) y
+     'Instalar_XV_Bass_Pedal_Windows_x64.exe' (Windows) y se publican solos
+     en 'Releases'!
+
+--------------------------------------------------------------------------------
+OPCION B (SOLO DESDE EL NAVEGADOR SIN USAR TERMINAL):
+--------------------------------------------------------------------------------
+  1) Entra a https://github.com/Somospopups/Plugin-Bass
+  2) Hace clic en 'uploading an existing file'.
+  3) Arrastra todo el contenido de esta carpeta (especialmente 'xv_updates.json',
+     'README.md' e 'index.html'; en Mac presiona Cmd + Shift + . en Finder si
+     queres ver y arrastrar tambien la carpeta '.github').
+  4) Hace clic en el boton verde 'Commit changes'.
+
+--------------------------------------------------------------------------------
+¿COMO AGREGAR CANCIONES NUEVAS O RETOCAR PRESETS EN EL FUTURO?
+--------------------------------------------------------------------------------
+  ¡No hace falta recompilar ni reinstalar nada!
+  1) Entra a https://github.com/Somospopups/Plugin-Bass/blob/main/xv_updates.json
+  2) Toca el icono del lapiz (Edit this file).
+  3) Cambia "presetsRevision": 1  por  "presetsRevision": 2 (siempre subilo +1).
+  4) Edita perillas o agrega objetos nuevos en la lista "presets" (cabIndex:
+     0 = BASS, 1 = PUNK, 2 = CLEAN).
+  5) Dale a 'Commit changes'. ¡Todos los usuarios recibiran los nuevos presets
+     automaticamente al abrir el plugin!

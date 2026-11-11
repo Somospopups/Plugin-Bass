@@ -1,0 +1,229 @@
+name: Build & Publish XV Bass Pedal (iPad iOS 12 .ipa + Mac .pkg + Windows .exe)
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'CMakeLists.txt'
+      - 'Source/**'
+      - 'Resources/**'
+      - 'installer_ci_win64.nsi'
+      - '.github/workflows/**'
+  tags:
+    - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ios-ipad:
+    name: iPad & iPhone Native App (.ipa iOS 12.0+ / iPad mini 2)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone JUCE 8.0.4 Once
+        run: git clone --depth 1 --branch 8.0.4 https://github.com/juce-framework/JUCE.git /tmp/JUCE
+
+      - name: Build Native Standalone iPad App (iOS 12.0+ arm64)
+        run: |
+          cmake -B build-ios-app -G Xcode \
+            -DJUCE_DIR=/tmp/JUCE \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DXV_IOS_INCLUDE_AUV3=OFF
+
+          xcodebuild -project build-ios-app/XVBassPedal.xcodeproj \
+            -target XVBassPedal_Standalone \
+            -configuration Release \
+            -sdk iphoneos \
+            ARCHS=arm64 \
+            IPHONEOS_DEPLOYMENT_TARGET=12.0 \
+            ENABLE_BITCODE=NO \
+            VALIDATE_PRODUCT=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+          APP_DIR=$(find build-ios-app -name "XV Bass Pedal.app" -type d | head -n 1)
+          echo "Found Standalone iOS App at: $APP_DIR"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_DIR" "Payload/XV Bass Pedal.app"
+          zip -r -9 XV_Bass_Pedal_iPad_iOS12.ipa Payload
+          rm -rf Payload
+
+      - name: Build Native iPad App + GarageBand AUv3 Extension (iOS 12.0+ arm64)
+        continue-on-error: true
+        run: |
+          cmake -B build-ios-auv3 -G Xcode \
+            -DJUCE_DIR=/tmp/JUCE \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 \
+            -DXV_IOS_INCLUDE_AUV3=ON
+
+          xcodebuild -project build-ios-auv3/XVBassPedal.xcodeproj \
+            -target XVBassPedal_Standalone \
+            -configuration Release \
+            -sdk iphoneos \
+            ARCHS=arm64 \
+            IPHONEOS_DEPLOYMENT_TARGET=12.0 \
+            ENABLE_BITCODE=NO \
+            VALIDATE_PRODUCT=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+          APP_DIR=$(find build-ios-auv3 -name "XV Bass Pedal.app" -type d | head -n 1)
+          echo "Found AUv3 Host iOS App at: $APP_DIR"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_DIR" "Payload/XV Bass Pedal.app"
+          zip -r -9 XV_Bass_Pedal_iPad_iOS12_GarageBand_AUv3.ipa Payload
+          rm -rf Payload
+
+      - name: Upload iOS .ipa Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: iPad-iOS12-Installers
+          path: |
+            XV_Bass_Pedal_iPad_iOS12.ipa
+            XV_Bass_Pedal_iPad_iOS12_GarageBand_AUv3.ipa
+
+  build-macos:
+    name: macOS Universal (.pkg Logic Pro AU + VST3 + App)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake (Universal Binary arm64 + x86_64)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="10.15"
+
+      - name: Build Plugin Bundles
+        run: cmake --build build --config Release --parallel
+
+      - name: Ad-hoc Codesign & Build Native macOS .pkg Installer
+        run: |
+          AU_BUNDLE="build/XVBassPedal_artefacts/Release/AU/XV Bass Pedal.component"
+          VST3_BUNDLE="build/XVBassPedal_artefacts/Release/VST3/XV Bass Pedal.vst3"
+          APP_BUNDLE="build/XVBassPedal_artefacts/Release/Standalone/XV Bass Pedal.app"
+
+          codesign --force --deep -s - "$AU_BUNDLE"
+          codesign --force --deep -s - "$VST3_BUNDLE"
+          codesign --force --deep -s - "$APP_BUNDLE"
+
+          mkdir -p pkg_root/Library/Audio/Plug-Ins/Components \
+                   pkg_root/Library/Audio/Plug-Ins/VST3 \
+                   pkg_root/Applications \
+                   pkg_scripts
+
+          cp -R "$AU_BUNDLE"   pkg_root/Library/Audio/Plug-Ins/Components/
+          cp -R "$VST3_BUNDLE" pkg_root/Library/Audio/Plug-Ins/VST3/
+          cp -R "$APP_BUNDLE"  pkg_root/Applications/
+
+          cat << 'EOF' > pkg_scripts/postinstall
+          #!/bin/bash
+          xattr -cr "/Library/Audio/Plug-Ins/Components/XV Bass Pedal.component" 2>/dev/null || true
+          xattr -cr "/Library/Audio/Plug-Ins/VST3/XV Bass Pedal.vst3" 2>/dev/null || true
+          xattr -cr "/Applications/XV Bass Pedal.app" 2>/dev/null || true
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          exit 0
+          EOF
+          chmod +x pkg_scripts/postinstall
+
+          VERSION="1.6.0"
+          if [ -f xv_updates.json ]; then
+            VERSION=$(python3 -c "import json; print(json.load(open('xv_updates.json')).get('pluginVersion','1.6.0'))")
+          fi
+
+          pkgbuild --root pkg_root \
+            --scripts pkg_scripts \
+            --identifier "com.xvaudio.xvbasspedal.pkg" \
+            --version "$VERSION" \
+            --install-location "/" \
+            xv_component.pkg
+
+          productbuild --package xv_component.pkg Instalar_XV_Bass_Pedal_Mac_Universal.pkg
+
+      - name: Upload macOS .pkg Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-Universal-Installer
+          path: Instalar_XV_Bass_Pedal_Mac_Universal.pkg
+
+  build-windows:
+    name: Windows x64 (.exe Installer VST3 + Standalone)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Plugin
+        run: cmake --build build --config Release --parallel
+
+      - name: Build NSIS Windows Installer (.exe)
+        shell: pwsh
+        run: |
+          if (!(Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y --no-progress
+          }
+          $nsis = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (!$nsis) { $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
+          & $nsis installer_ci_win64.nsi
+
+      - name: Upload Windows .exe Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-x64-Installer
+          path: Instalar_XV_Bass_Pedal_Windows_x64.exe
+
+  publish-release:
+    name: Publish Official Release (.ipa + .pkg + .exe)
+    needs: [ build-ios-ipad, build-macos, build-windows ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Built Installers
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="1.6.0"
+          if [ -f xv_updates.json ]; then
+            VERSION=$(python3 -c "import json; print(json.load(open('xv_updates.json')).get('pluginVersion','1.6.0'))")
+          fi
+          TAG="v${VERSION}"
+          ASSETS="XV_Bass_Pedal_iPad_iOS12.ipa Instalar_XV_Bass_Pedal_Mac_Universal.pkg Instalar_XV_Bass_Pedal_Windows_x64.exe"
+          if [ -f XV_Bass_Pedal_iPad_iOS12_GarageBand_AUv3.ipa ]; then
+            ASSETS="$ASSETS XV_Bass_Pedal_iPad_iOS12_GarageBand_AUv3.ipa"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" $ASSETS --clobber
+          else
+            gh release create "$TAG" $ASSETS \
+              --title "XV Bass Pedal v${VERSION} (iPad iOS 12 .ipa + Mac Logic Pro .pkg + Windows .exe)" \
+              --notes "Instaladores nativos oficiales de XV Bass Pedal v${VERSION}:
+          - 📱 **iPad mini 2 (iOS 12.5.7) / iPad / iPhone — App Nativa (Recomendada con Sideloadly)**: XV_Bass_Pedal_iPad_iOS12.ipa
+          - 🎹 **iPad / iPhone — App Nativa + Plugin AUv3 para GarageBand / AUM**: XV_Bass_Pedal_iPad_iOS12_GarageBand_AUv3.ipa
+          - 🍎 **macOS (Logic Pro / GarageBand / VST3 / Standalone Universal)**: Instalar_XV_Bass_Pedal_Mac_Universal.pkg
+          - 🪟 **Windows 64-bit (VST3 + Standalone)**: Instalar_XV_Bass_Pedal_Windows_x64.exe" \
+              --latest
+          fi
