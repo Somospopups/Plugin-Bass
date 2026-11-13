@@ -1,0 +1,63 @@
+name: Probar instalador Mac
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths: ['.github/workflows/probar_instalador_mac.yml']
+permissions:
+  actions: read
+  contents: read
+jobs:
+  prueba:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Descargar instalador generado
+        uses: actions/download-artifact@v4
+        with:
+          name: XV-Bass-Pedal-instalador-Mac-prueba-4
+          run-id: 43337951661
+          github-token: ${{ github.token }}
+      - name: Instalar el paquete
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'echo "::error::Fallo al instalar el paquete, linea $LINENO: $BASH_COMMAND"' ERR
+          sudo installer -pkg XV_Bass_Pedal_Mac_PRUEBA.pkg -target /
+      - name: Comprobar archivos instalados
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'echo "::error::Fallo al comprobar ${ITEM:-archivos}: $BASH_COMMAND"' ERR
+          for ITEM in '/Applications/XV Bass Pedal.app' '/Library/Audio/Plug-Ins/Components/XV Bass Pedal.component' '/Library/Audio/Plug-Ins/VST3/XV Bass Pedal.vst3'; do
+            test -d "$ITEM"
+            codesign --verify --deep --strict --verbose=2 "$ITEM"
+            EXECUTABLE=$(defaults read "$ITEM/Contents/Info" CFBundleExecutable)
+            lipo "$ITEM/Contents/MacOS/$EXECUTABLE" -verify_arch arm64 x86_64
+            echo "Verificado: $ITEM"
+          done
+      - name: Validar Audio Unit con auval de Apple
+        shell: bash
+        run: |
+          set +e
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          python3 -c 'import subprocess,sys; f=open("auval.txt","w"); p=subprocess.run(["auval","-v","aufx","XvBp","XvAu"],stdout=f,stderr=subprocess.STDOUT,timeout=180); sys.exit(p.returncode)'
+          result=$?
+          cat auval.txt
+          if [ "$result" -ne 0 ] || ! grep -q 'AU VALIDATION SUCCEEDED' auval.txt; then
+            grep -iE 'error|fail|unable|cannot|could not|not found' auval.txt | head -15 | while IFS= read -r line; do
+              line=${line//'%'/'%25'}
+              echo "::error::$line"
+            done
+            echo '::error::La validacion AU no termino correctamente; ver el registro auval.txt.'
+            exit 1
+          fi
+          echo 'AU VALIDATION SUCCEEDED'
+      - name: Guardar registro de prueba
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultado-prueba-Audio-Unit
+          path: auval.txt
+          if-no-files-found: ignore
+          retention-days: 30
