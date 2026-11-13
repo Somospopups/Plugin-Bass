@@ -1,0 +1,80 @@
+name: Crear instalador Mac de prueba - intento 3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/instalador_mac_3.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  instalador-mac:
+    name: Compilar AU, VST3 y app para Mac
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Corregir error de compilacion de exportador
+        shell: bash
+        run: |
+          sed -i '' 's/juce::File jf (juce::String (p));/juce::File jf {juce::String (p)};/' Source/DSP/XVProfileExporter.h
+          grep -F 'juce::File jf {juce::String (p)};' Source/DSP/XVProfileExporter.h
+
+      - name: Configurar proyecto universal
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DCMAKE_CXX_FLAGS=-DDONT_SET_USING_JUCE_NAMESPACE=1
+
+      - name: Compilar
+        shell: bash
+        run: |
+          set +e
+          cmake --build build --config Release --parallel 2 2>&1 | tee /tmp/xv-compile.log
+          result=${PIPESTATUS[0]}
+          if [ "$result" -ne 0 ]; then
+            grep -E 'error:|fatal error:' /tmp/xv-compile.log | head -10 | while IFS= read -r line; do
+              line=${line//'%'/'%25'}
+              echo "::error::$line"
+            done
+          fi
+          exit "$result"
+
+      - name: Verificar componentes y preparar instalador
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="build/XVBassPedal_artefacts/Release"
+          AU="$ROOT/AU/XV Bass Pedal.component"
+          VST="$ROOT/VST3/XV Bass Pedal.vst3"
+          APP="$ROOT/Standalone/XV Bass Pedal.app"
+          for ITEM in "$AU" "$VST" "$APP"; do
+            test -d "$ITEM"
+            codesign --force --deep --sign - "$ITEM"
+            codesign --verify --deep --strict --verbose=2 "$ITEM"
+            EXECUTABLE=$(defaults read "$(pwd)/$ITEM/Contents/Info" CFBundleExecutable)
+            lipo -verify_arch arm64 x86_64 "$ITEM/Contents/MacOS/$EXECUTABLE"
+          done
+          mkdir -p paquete/Library/Audio/Plug-Ins/Components \
+                   paquete/Library/Audio/Plug-Ins/VST3 \
+                   paquete/Applications
+          ditto "$AU" paquete/Library/Audio/Plug-Ins/Components/"XV Bass Pedal.component"
+          ditto "$VST" paquete/Library/Audio/Plug-Ins/VST3/"XV Bass Pedal.vst3"
+          ditto "$APP" paquete/Applications/"XV Bass Pedal.app"
+          pkgbuild --root paquete --identifier com.xvaudio.xvbasspedal.pkg \
+            --version 1.6.0 --install-location / XV_Bass_Pedal_Mac_PRUEBA.pkg
+          pkgutil --payload-files XV_Bass_Pedal_Mac_PRUEBA.pkg
+
+      - name: Entregar instalador para descargar
+        uses: actions/upload-artifact@v4
+        with:
+          name: XV-Bass-Pedal-instalador-Mac-prueba-3
+          path: XV_Bass_Pedal_Mac_PRUEBA.pkg
+          if-no-files-found: error
+          retention-days: 30
